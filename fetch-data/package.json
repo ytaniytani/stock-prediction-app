@@ -1,0 +1,14 @@
+{
+  "name": "fetch-data",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "日経225先物 予想ラボ 用の実データ取得補助スクリプト（ログイン不要な公開CSVのみ使用）",
+  "scripts": {
+    "fetch": "node fetch.mjs",
+    "serve": "node fetch.mjs --serve"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
