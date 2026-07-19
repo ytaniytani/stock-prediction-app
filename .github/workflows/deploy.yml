@@ -39,6 +39,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Bundle market data
+        run: mkdir -p dist/data && cp ../fetch-data/data/*.csv dist/data/
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
