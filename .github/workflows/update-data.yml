@@ -1,0 +1,55 @@
+name: Update market data
+
+on:
+  schedule:
+    # 22:00 UTC 平日 = 日本時間 翌朝7:00（米市場クローズ後・東京市場オープン前）
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Fetch latest data from stooq
+        run: node fetch-data/update.mjs
+
+      - name: Commit and push if changed
+        id: commit
+        run: |
+          git add fetch-data/data
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "データに変更なし。コミットをスキップします。"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore: 市場データを自動更新 ($(date -u +%Y-%m-%d))"
+            git push origin main
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # GITHUB_TOKENによるpushはpushトリガーの他ワークフローを起動しないため、
+      # データが変わったときはデプロイを明示的に起動する
+      - name: Trigger Pages deploy
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy.yml --ref main --repo "$GITHUB_REPOSITORY"

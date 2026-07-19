@@ -18,7 +18,19 @@ async function fetchWithTimeout(url: string, ms: number, init?: RequestInit): Pr
 }
 
 export function DataManagerScreen() {
-  const { dataMode, coverage, importCsv, resetToSampleData, clearInstrument, feeSlippagePct, setFeeSlippagePct } = useAppData();
+  const { dataMode, coverage, importCsv, syncBundledData, resetToSampleData, clearInstrument, feeSlippagePct, setFeeSlippagePct } = useAppData();
+  const [bundledBusy, setBundledBusy] = useState(false);
+  const [bundledMessage, setBundledMessage] = useState<string | null>(null);
+
+  async function handleBundledSync() {
+    setBundledBusy(true);
+    setBundledMessage(null);
+    try {
+      setBundledMessage(await syncBundledData());
+    } finally {
+      setBundledBusy(false);
+    }
+  }
   const [code, setCode] = useState<InstrumentCode>("N225");
   const [text, setText] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -114,6 +126,22 @@ export function DataManagerScreen() {
         <button className="btn btn-sm" onClick={resetToSampleData}>
           サンプルデータに戻す（既存データは上書きされます）
         </button>
+      </div>
+
+      <div className="card">
+        <h3>
+          サイト同梱の実データ
+          <InfoTip text="リポジトリにコミットされた実データCSV（日経平均など）を公開サイトに同梱しています。GitHub Actionsが毎営業日、stooq.comから最新分を自動取得してこのCSVを更新します。アプリは起動のたびに自動で取り込むため、通常はこのボタンを押す必要はありません。" />
+        </h3>
+        <p style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+          公開サイトには毎営業日自動更新される実データが同梱されており、アプリ起動時に自動で取り込まれます。手動で取り込み直したい場合は下のボタンを押してください。
+        </p>
+        <button className="btn btn-primary btn-sm" disabled={bundledBusy} onClick={handleBundledSync}>
+          {bundledBusy ? "取り込み中…" : "同梱データを今すぐ取り込み直す"}
+        </button>
+        {bundledMessage && (
+          <pre style={{ marginTop: 10, fontSize: 12, color: "var(--text-secondary)", whiteSpace: "pre-wrap" }}>{bundledMessage}</pre>
+        )}
       </div>
 
       <div className="card">

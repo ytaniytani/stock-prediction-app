@@ -10,6 +10,54 @@ import { parseOhlcCsv } from "../data/csvImport";
 
 const ALL_CODES: InstrumentCode[] = INSTRUMENTS.map((i) => i.code);
 
+function mergeByDate(existing: OHLC[], incoming: OHLC[]): OHLC[] {
+  const map = new Map(existing.map((r) => [r.date, r]));
+  for (const r of incoming) map.set(r.date, r);
+  return Array.from(map.values()).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+// サイトに同梱された実データCSV（/data/<CODE>.csv）を取得する。
+// 公開サイトではGitHub Actionsが毎営業日これを最新化している。
+// 開発サーバー等でファイルが無い場合は該当銘柄をスキップする。
+async function fetchBundledSeries(): Promise<Partial<Record<InstrumentCode, OHLC[]>>> {
+  const results = await Promise.all(
+    ALL_CODES.map(async (code) => {
+      try {
+        const res = await fetch(`${import.meta.env.BASE_URL}data/${code}.csv`, { cache: "no-cache" });
+        if (!res.ok) return null;
+        const text = await res.text();
+        // SPAサーバーがindex.htmlを200で返すケースを除外
+        if (!/^date,/i.test(text.trimStart())) return null;
+        const parsed = parseOhlcCsv(text);
+        if (parsed.errors.length > 0 || parsed.rows.length === 0) return null;
+        return [code, parsed.rows] as const;
+      } catch {
+        return null;
+      }
+    })
+  );
+  const out: Partial<Record<InstrumentCode, OHLC[]>> = {};
+  for (const r of results) if (r) out[r[0]] = r[1];
+  return out;
+}
+
+// 同梱データをbaseへマージして保存し、データモードを実データにする。
+// baseにはサンプルデータを渡さないこと（実データと混ざるため）。
+async function applyBundledData(
+  bundled: Partial<Record<InstrumentCode, OHLC[]>>,
+  base: Partial<Record<InstrumentCode, OHLC[]>>
+): Promise<Record<InstrumentCode, OHLC[]>> {
+  const next = { ...base } as Record<InstrumentCode, OHLC[]>;
+  for (const code of Object.keys(bundled) as InstrumentCode[]) {
+    next[code] = mergeByDate(base[code] ?? [], bundled[code]!);
+  }
+  for (const code of ALL_CODES) {
+    await saveSeries(code, next[code] ?? []);
+  }
+  await persistDataMode("real");
+  return next;
+}
+
 interface AppDataValue {
   loading: boolean;
   dataMode: DataMode;
@@ -22,6 +70,7 @@ interface AppDataValue {
   feeSlippagePct: number;
   setFeeSlippagePct: (v: number) => void;
   importCsv: (code: InstrumentCode, text: string) => Promise<{ added: number; skipped: number; errors: string[] }>;
+  syncBundledData: () => Promise<string>;
   resetToSampleData: () => Promise<void>;
   clearInstrument: (code: InstrumentCode) => Promise<void>;
 }
@@ -39,8 +88,17 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     const mode = await getDataMode();
     const stored = await loadAllSeries(ALL_CODES);
     const hasAny = ALL_CODES.some((c) => (stored[c]?.length ?? 0) > 0);
-    if (!hasAny) {
-      // 初回起動: サンプルデータを自動投入して即座に触れるようにする
+
+    // サイト同梱の実データがあれば起動時に自動で取り込み・最新化する
+    const bundled = await fetchBundledSeries();
+    if (Object.keys(bundled).length > 0) {
+      // サンプルデータはベースにしない（実データと混ざるため破棄する）
+      const base = mode === "real" && hasAny ? (stored as Partial<Record<InstrumentCode, OHLC[]>>) : {};
+      const next = await applyBundledData(bundled, base);
+      setDataModeState("real");
+      setSeries(next);
+    } else if (!hasAny) {
+      // 初回起動かつ同梱データも無い場合: サンプルデータを自動投入して即座に触れるようにする
       const sample = generateSampleDataset(30);
       for (const code of ALL_CODES) {
         await saveSeries(code, sample[code]);
@@ -80,6 +138,19 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     },
     [series]
   );
+
+  const syncBundledData = useCallback(async (): Promise<string> => {
+    const bundled = await fetchBundledSeries();
+    const codes = Object.keys(bundled) as InstrumentCode[];
+    if (codes.length === 0) {
+      return "サイト同梱データを取得できませんでした（公開サイト上でのみ利用できます）。";
+    }
+    const base = dataMode === "real" ? (series as Partial<Record<InstrumentCode, OHLC[]>>) : {};
+    const next = await applyBundledData(bundled, base);
+    setDataModeState("real");
+    setSeries(next);
+    return codes.map((c) => `✓ ${c}: 累計${next[c].length}件`).join(" / ");
+  }, [dataMode, series]);
 
   const resetToSampleData = useCallback(async () => {
     setLoading(true);
@@ -147,6 +218,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     feeSlippagePct,
     setFeeSlippagePct: updateFeeSlippagePct,
     importCsv,
+    syncBundledData,
     resetToSampleData,
     clearInstrument,
   };
